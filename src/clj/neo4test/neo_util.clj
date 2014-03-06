@@ -451,6 +451,9 @@
 (defmethod node-data java.lang.Long [nodes]
   nodes
 )
+(defmethod node-data java.lang.Double [nodes]
+  nodes
+)
 (defmethod node-data :default [nodes]
   (try (.keySet nodes)
     (fmap node-data (map-to-hash nodes))
