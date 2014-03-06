@@ -23,5 +23,4 @@
 (def app
   (-> (handler/site main-routes)
       wrap-base-url
-      wrap-json-params
-      simple-logging-middleware))
+      wrap-json-params))

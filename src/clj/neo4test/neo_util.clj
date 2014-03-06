@@ -1,7 +1,10 @@
 (ns neo4test.neo-util
-  (:use clojure.tools.logging)
+  (:use clojure.tools.logging
+        clojure.contrib.generic.functor
+        clojure.walk)
   (:require [clojure.set :as set])
   (:import org.neo4j.cypher.javacompat.ExecutionEngine
+           [org.neo4j.test TestGraphDatabaseFactory]
            org.neo4j.graphdb.factory.GraphDatabaseFactory
            org.neo4j.tooling.GlobalGraphOperations
            (org.neo4j.graphdb PropertyContainer
@@ -16,14 +19,41 @@
 (defonce ^:dynamic *props* nil)
 (defonce ^:dynamic *ggo* nil)
 
+(declare create-database execute-query)
+
+(def create-query (atom nil))
+
+(defn get-db
+  [query]
+  (let [db (create-database query)]
+    (reset! create-query (partial execute-query db))
+    db
+  )
+)
+
+(defn- execute-query
+  "Just used for create right now..."
+  [db cypher]
+  (let [engine (ExecutionEngine. db)
+        result (.execute engine cypher)]
+    (sequence result)))
+
+(defn- create-database
+  "Creates and returns database using the cypher passed in"
+  [cypher]
+  (let [db (.newImpermanentDatabase (TestGraphDatabaseFactory. ))
+        engine (ExecutionEngine. db)]
+    (.execute engine cypher)
+    db))
+
 (defn start
-  ([db]
+  ([query]
     (do
       (if *g* (.shutdown *g*))
       (alter-var-root #'*props*
         (fn [_] {}))
       (alter-var-root #'*g*
-        (fn [_] db))
+        (fn [_] (get-db query)))
       (alter-var-root #'*cypher*
         (fn [_] (ExecutionEngine. *g*)))
       (alter-var-root #'*ggo*
@@ -387,25 +417,53 @@
           (if (= (reltype rel) (name type))
             rel))))))
 
+(defn map-to-hash [m]
+  (reduce (fn [acc, k] (assoc acc k (.get m k) )) {} (.keySet m))
+)
 
 (defn fake-self [node]
    (str "http://localhost:7474/db/data/node/" (.getId node))
 )
 
 (defn -node-data [node] 
-  (reduce #(merge %1 %2) {}
-    (for [k (.getPropertyKeys node)]
-      (hash-map (keyword k) (.getProperty node k)))))
+  (tx
+    (reduce #(merge %1 %2) {}
+      (for [k (.getPropertyKeys node)]
+        (hash-map (keyword k) (.getProperty node k)))))
+  )
 
 (defmulti node-data class) 
 (defmethod node-data org.neo4j.graphdb.Node [node]
-  {:self (fake-self node) :data (-node-data node)}) 
+  {:self (fake-self node) :data (-node-data node)}
+)
 (defmethod node-data org.neo4j.kernel.impl.core.NodeProxy [node]
-  {:self (fake-self node) :data (-node-data node)})
-(defmethod node-data :default [nodes] 
-  (map -node-data (.toArray nodes))
-) 
-
+  {:self (fake-self node) :data (-node-data node)}
+)
+(defmethod node-data clojure.lang.PersistentVector [nodes]
+  (reduce (fn [acc n] (cons n acc) ) [] nodes)
+)
+(defmethod node-data org.neo4j.kernel.impl.core.RelationshipProxy [nodes]
+  (-node-data nodes)
+)
+(defmethod node-data java.lang.String [nodes]
+  nodes
+)
+(defmethod node-data java.lang.Long [nodes]
+  nodes
+)
+(defmethod node-data :default [nodes]
+  (try (.keySet nodes)
+    (fmap node-data (map-to-hash nodes))
+    (catch Exception d
+      (try (map node-data nodes)
+        (catch Exception e
+          (println (.getMessage e))
+          (.values nodes)
+        )
+      )
+    )
+  )
+)
 
 ;;;;; Cypher
 
@@ -418,17 +476,15 @@
                             (.execute query
                               (if has-params
                                 (let [params (first more)
-                                      keys (keys params)
-                                      result (set/rename-keys
-                                    params
-                                    (into {} (for [k keys] [k (name k)])))]
+                                      result (stringify-keys params)]
                                     result
                                   )
                                 {}))))]
-      (for [row result
-            column (.entrySet row)]
-            (let [colname (.getKey column)]
-              [colname (tx (node-data (get row colname)))]
-            )
-        ))))
-
+      (map (fn [row]
+        (map (fn [column]
+          (let [colname (.getKey column)]
+            [colname (tx (node-data (get row colname)))]
+          )
+         ) (.entrySet row)
+        )
+      ) result))))
