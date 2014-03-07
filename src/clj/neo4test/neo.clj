@@ -26,8 +26,6 @@
   				columns (distinct (flatten (map (partial map first) res)))
   				rows (map (partial map last) res)
   				]
-      ; (warn q)
-      ; (warn p)
   		(json-response {:columns columns :data rows})
   	)
   	

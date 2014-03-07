@@ -425,14 +425,16 @@
    (str "http://localhost:7474/db/data/node/" (.getId node))
 )
 
+(defmulti node-data class) 
+
 (defn -node-data [node] 
   (tx
     (reduce #(merge %1 %2) {}
       (for [k (.getPropertyKeys node)]
-        (hash-map (keyword k) (.getProperty node k)))))
+        (hash-map (keyword k) (node-data (.getProperty node k))))))
   )
 
-(defmulti node-data class) 
+
 (defmethod node-data org.neo4j.graphdb.Node [node]
   {:self (fake-self node) :data (-node-data node)}
 )
@@ -448,17 +450,28 @@
 (defmethod node-data java.lang.String [nodes]
   nodes
 )
+(defmethod node-data (Class/forName "[Ljava.lang.String;") [nodes]
+  (map node-data nodes)
+)
 (defmethod node-data java.lang.Long [nodes]
   nodes
 )
 (defmethod node-data java.lang.Double [nodes]
   nodes
 )
+(defmethod node-data java.lang.Boolean [nodes]
+  nodes
+)
+(defmethod node-data java.lang.Integer [nodes]
+  nodes
+)
 (defmethod node-data :default [nodes]
-  (try (.keySet nodes)
+  (try
+    (.keySet nodes)
     (fmap node-data (map-to-hash nodes))
     (catch Exception d
-      (try (map node-data nodes)
+      (try
+        (map node-data nodes)
         (catch Exception e
           (println (.getMessage e))
           (.values nodes)
